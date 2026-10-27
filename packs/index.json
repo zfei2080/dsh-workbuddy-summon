@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-27T18:21:25.441Z",
+  "packs": [
+    {
+      "dir": "all-domain-brain-trust",
+      "plugin": "all-domain-brain-trust",
+      "label": "全域智囊团",
+      "expertType": "team",
+      "members": 16,
+      "skills": 15
+    }
+  ]
+}

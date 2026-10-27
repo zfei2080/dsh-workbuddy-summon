@@ -1,0 +1,353 @@
+{
+  "name": "all-domain-brain-trust",
+  "version": "1.0.0",
+  "description": "全域智囊团：10 位专家 + 软件开发团队 5 角色，覆盖法务/产品/财务/思维/设计/教育/心理/行为/销售/研发。",
+  "expertType": "team",
+  "agentName": "brain-trust-lead",
+  "displayName": {
+    "zh": "全域智囊团",
+    "en": "All-Domain Brain Trust"
+  },
+  "profession": {
+    "zh": "全域智囊团（10 位专家 + 软件开发团队 5 人）",
+    "en": "All-Domain Brain Trust (10 experts + software delivery team of 5)"
+  },
+  "displayDescription": {
+    "zh": "15 位专家组成的一站式智囊团：法务、产品、财务、思维决策、设计、教培经营、K12 教育、心理分析、行为心理、课程销售，外加一套完整软件开发团队（交付总监 + 产品 + 架构 + 工程 + QA）。",
+    "en": "A 15-expert brain trust covering legal, product, finance, decision-making, design, education operations, K12, psychology, behavioral science, sales coaching, plus a full software delivery team."
+  },
+  "avatar": "avatars/team.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "我有个复杂问题，需要多个领域的专家一起帮我拿主意：请先判断该找哪几位、怎么协作，再给我一份能直接执行的方案。",
+    "en": "I have a complex problem that needs multiple domains. Decide who should work on it and how, then give me an actionable plan."
+  },
+  "plugin": "all-domain-brain-trust",
+  "tags": [
+    {
+      "zh": "全域顾问",
+      "en": "All-domain advisory"
+    },
+    {
+      "zh": "企业经营",
+      "en": "Business operations"
+    },
+    {
+      "zh": "个人成长",
+      "en": "Personal growth"
+    },
+    {
+      "zh": "软件开发",
+      "en": "Software delivery"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我把这个生意从合同、成本、产品三个角度体检一遍",
+      "en": "Audit this business from legal, cost, and product angles."
+    },
+    {
+      "zh": "我要做一个重要决定，先用苏格拉底式提问帮我把问题问清楚",
+      "en": "Help me clarify a major decision with Socratic questioning first."
+    },
+    {
+      "zh": "给我一份产品方案，并让开发团队评估可行性与工作量",
+      "en": "Give me a product proposal and have the dev team assess feasibility."
+    }
+  ],
+  "teamInfo": {
+    "leadAgent": "brain-trust-lead",
+    "memberAgents": [
+      "litigation-legal",
+      "ask-liuxiaopai",
+      "smb-finance",
+      "chaogeek-kongming",
+      "ui-designer",
+      "jwb-monthly-diagnosis-expert",
+      "k12-education",
+      "therapy-board-expert",
+      "behavioral-psychology-expert",
+      "jwb-sales-consultant-expert",
+      "software-team-lead",
+      "software-product-manager",
+      "software-architect",
+      "software-engineer",
+      "software-qa-engineer"
+    ]
+  },
+  "members": [
+    {
+      "id": "brain-trust-lead",
+      "name": {
+        "zh": "首席幕僚长",
+        "en": "Chief of Staff"
+      },
+      "profession": {
+        "zh": "全域调度与交付",
+        "en": "Orchestration & delivery"
+      },
+      "avatar": "avatars/team.png",
+      "role": "lead"
+    },
+    {
+      "id": "litigation-legal",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "litigation-legal.md",
+      "name": {
+        "en": "Litigation Legal Expert",
+        "zh": "诉讼法务专家"
+      },
+      "profession": {
+        "en": "Litigation Support Counsel",
+        "zh": "诉讼支持顾问"
+      },
+      "avatar": "avatars/litigation-legal.png",
+      "role": "member"
+    },
+    {
+      "id": "ask-liuxiaopai",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "ask-liuxiaopai.md",
+      "name": {
+        "en": "AI Liu Xiaopai",
+        "zh": "AI 刘小排"
+      },
+      "profession": {
+        "en": "Product Advisor",
+        "zh": "产品顾问"
+      },
+      "avatar": "avatars/ask-liuxiaopai.png",
+      "role": "member"
+    },
+    {
+      "id": "smb-finance",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "smb-finance.md",
+      "name": {
+        "en": "Qian",
+        "zh": "钱守通"
+      },
+      "profession": {
+        "en": "Finance Steward",
+        "zh": "财务管家"
+      },
+      "avatar": "avatars/smb-finance.png",
+      "role": "member"
+    },
+    {
+      "id": "chaogeek-kongming",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "chaogeek-kongming.md",
+      "name": {
+        "en": "ChaoGeek 0xKongming",
+        "zh": "ChaoGeek 0x孔明"
+      },
+      "profession": {
+        "en": "Socratic AI Thinking Partner",
+        "zh": "苏格拉底式AI思维搭子"
+      },
+      "avatar": "avatars/chaogeek-kongming.png",
+      "role": "member"
+    },
+    {
+      "id": "ui-designer",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "ui-designer.md",
+      "name": {
+        "en": "Sam",
+        "zh": "像素君"
+      },
+      "profession": {
+        "en": "UI Designer",
+        "zh": "UI设计师"
+      },
+      "avatar": "avatars/ui-designer.png",
+      "role": "member"
+    },
+    {
+      "id": "jwb-monthly-diagnosis-expert",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "jwb-monthly-diagnosis-expert.md",
+      "name": {
+        "en": "WorkBuddy Academy Business Diagnosis Expert",
+        "zh": "教务宝机构经营诊断专家"
+      },
+      "profession": {
+        "en": "Education Business Analyst",
+        "zh": "教培机构经营顾问"
+      },
+      "avatar": "avatars/jwb-monthly-diagnosis-expert.png",
+      "role": "member"
+    },
+    {
+      "id": "k12-education",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "k12-education.md",
+      "name": {
+        "en": "K12 Education Expert",
+        "zh": "K12全科教育专家"
+      },
+      "profession": {
+        "en": "K12 Full-Subject Education Consultant",
+        "zh": "K12全学科教育顾问"
+      },
+      "avatar": "avatars/k12-education.png",
+      "role": "member"
+    },
+    {
+      "id": "therapy-board-expert",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "therapy-board-expert.md",
+      "name": {
+        "zh": "心理视角私董会",
+        "en": "Therapy Board Expert"
+      },
+      "profession": {
+        "zh": "多流派心理分析顾问",
+        "en": "Multi-approach Psychological Insight Consultant"
+      },
+      "avatar": "avatars/therapy-board-expert.png",
+      "role": "member"
+    },
+    {
+      "id": "behavioral-psychology-expert",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "behavioral-psychology-expert.md",
+      "name": {
+        "en": "Behave",
+        "zh": "行为"
+      },
+      "profession": {
+        "en": "Behavioral Psychology Expert",
+        "zh": "行为心理学专家"
+      },
+      "avatar": "avatars/behavioral-psychology-expert.png",
+      "role": "member"
+    },
+    {
+      "id": "jwb-sales-consultant-expert",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "jwb-sales-consultant-expert.md",
+      "name": {
+        "en": "WorkBuddy Sales Consultant Expert",
+        "zh": "教务宝课程顾问话术专家"
+      },
+      "profession": {
+        "en": "Education Sales Coach",
+        "zh": "课程顾问培训教练"
+      },
+      "avatar": "avatars/jwb-sales-consultant-expert.png",
+      "role": "member"
+    },
+    {
+      "id": "software-team-lead",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "software-team-lead.md",
+      "name": {
+        "en": "Qi",
+        "zh": "齐活林"
+      },
+      "profession": {
+        "en": "Delivery Director",
+        "zh": "交付总监"
+      },
+      "avatar": "avatars/software-team-lead.png",
+      "role": "member"
+    },
+    {
+      "id": "software-product-manager",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "software-product-manager.md",
+      "name": {
+        "en": "Xu",
+        "zh": "许清楚"
+      },
+      "profession": {
+        "en": "Product Manager",
+        "zh": "产品经理"
+      },
+      "avatar": "avatars/software-product-manager.png",
+      "role": "member"
+    },
+    {
+      "id": "software-architect",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "software-architect.md",
+      "name": {
+        "en": "Gao",
+        "zh": "高见远"
+      },
+      "profession": {
+        "en": "Software Architect",
+        "zh": "架构师"
+      },
+      "avatar": "avatars/software-architect.png",
+      "role": "member"
+    },
+    {
+      "id": "software-engineer",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "software-engineer.md",
+      "name": {
+        "en": "Kou",
+        "zh": "寇豆码"
+      },
+      "profession": {
+        "en": "Software Engineer",
+        "zh": "工程师"
+      },
+      "avatar": "avatars/software-engineer.png",
+      "role": "member"
+    },
+    {
+      "id": "software-qa-engineer",
+      "plugin": "all-domain-brain-trust",
+      "agentFile": "software-qa-engineer.md",
+      "name": {
+        "en": "Yan",
+        "zh": "严过关"
+      },
+      "profession": {
+        "en": "QA Engineer",
+        "zh": "QA工程师"
+      },
+      "avatar": "avatars/software-qa-engineer.png",
+      "role": "member"
+    }
+  ],
+  "agents": [
+    "./agents/brain-trust-lead.md",
+    "./agents/litigation-legal.md",
+    "./agents/ask-liuxiaopai.md",
+    "./agents/smb-finance.md",
+    "./agents/chaogeek-kongming.md",
+    "./agents/ui-designer.md",
+    "./agents/jwb-monthly-diagnosis-expert.md",
+    "./agents/k12-education.md",
+    "./agents/therapy-board-expert.md",
+    "./agents/behavioral-psychology-expert.md",
+    "./agents/jwb-sales-consultant-expert.md",
+    "./agents/software-team-lead.md",
+    "./agents/software-product-manager.md",
+    "./agents/software-architect.md",
+    "./agents/software-engineer.md",
+    "./agents/software-qa-engineer.md"
+  ],
+  "skills": [
+    "./skills/agentic-opc-workflow/",
+    "./skills/ask-liuxiaopai-core/",
+    "./skills/browser-use/",
+    "./skills/cash-flow/",
+    "./skills/china-litigation-toolkit/",
+    "./skills/cognitive-disarmament/",
+    "./skills/frontend-dev/",
+    "./skills/impeccable/",
+    "./skills/invoice-chase/",
+    "./skills/litigation-workflows/",
+    "./skills/margin-analysis/",
+    "./skills/month-end-close/",
+    "./skills/socratic-alignment/",
+    "./skills/tax-preparation/",
+    "./skills/therapy-board/"
+  ]
+}

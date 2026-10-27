@@ -1,0 +1,21 @@
+# dsh-workbuddy-summon 的 bundle 补丁层。
+# 用 `dsh plugin add <目录>` 或 plugin_manager install_bundle 安装时自动应用，
+# 不需要手工编辑 profile 的 cordis.patch.yml。
+#
+# name 必须是 package.json 里的完整包名（本包非 scoped，就是 dsh-workbuddy-summon）。
+# config 字段：
+#   maxLeadChars   注入段里专家定义正文的字符上限（默认 24000，超出截断并给出 wb_expert_read 提示）
+#   warmCatalog    启动后是否预热目录（默认 true）
+#   market.enabled 在线专家市场总开关（默认 true；关掉后不注册 wb_market_* 工具与 /market/* 路由）
+#   market.cdpPort 从 WorkBuddy 调试端口抓登录 token 时用的端口（默认 9222）
+#
+# 0.2.0 起连接器功能已整体移除，不再有 connectors.* 配置项。
+- insert:
+    - id: workbuddy-summon
+      name: dsh-workbuddy-summon
+      config:
+        maxLeadChars: 24000
+        warmCatalog: true
+        market:
+          enabled: true
+          cdpPort: 9222
