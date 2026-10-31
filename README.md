@@ -200,18 +200,42 @@ node tests/catalog-parity.mjs
 | 模型工具 | `wb_summon` / `wb_unsummon`（市场专家额外传 `marketExpertId`） |
 | HTTP | `POST /summon {sessionId, plugin[, marketExpertId]}` / `POST /unsummon {sessionId}` |
 
-- 状态按 `sessionId` 分桶，落盘在 `~/.dsh/workbuddy-summon/summons.json`；注入段落盘在 `~/.dsh/workbuddy-summon/sections/*.md`，重启后读回、缺失的异步补算。
+- 状态按 `sessionId` 分桶，落盘在 `~/.dsh/workbuddy-summon/summons.json`（含 `taskKey` / `order` / `round` / `continuations`）；注入段落盘在 `~/.dsh/workbuddy-summon/sections/*.md`，重启后读回、缺失的异步补算。
+- 成员派发登记落盘在 `dispatches.json`（键 `sessionId + taskKey`，含指纹、`wb:` 标记、状态 `dispatched`/`verified`/`mismatch`/`revoked`、回读到的真实 `childId`），封顶 2000 条；轮次计数落盘在 `turns.json`，每 10 步写一次。两者随 `summons.json` 的会话封顶一起回收，不留孤儿。
 - `systemPrompt.section` 的求值器每个模型步只同步查内存表：**没有召唤记录 → 返回空串**（宿主会过滤空段，零残留）；有记录但段未就绪 → 本轮先不注入，后台补算。求值器里没有网络 / 磁盘扫描。
 - 取消召唤 = 删掉落盘段落（不是写空串）+ 清状态；启动时回收 0 字节与孤儿段落文件。
 
 ### 召唤后注入什么
 
 1. 身份声明 + **主理人 / 单专家的完整定义原文**（超过 `maxLeadChars`（默认 24000）截断，并给出 `wb_expert_read` 续读指引）；
-2. 团队编制表（Agent ID / 花名 / 职业）+ **调度映射表**；
-3. 协作铁律（建团只能主理人、成员结论为准、禁止代写、禁止 spawn 自己…）；
-4. 配套技能清单（名字 + 一行摘要 + 分层细节数量，正文按需取）。
+2. **本会话任务键**（`order×plugin×round`）+ 轮次预算；续做时额外追加「不许重做已完成的部分」的交代；
+3. 团队编制表（Agent ID / 花名 / 职业）+ **调度映射表** + **成员派发规程**；
+4. 协作铁律（建团只能主理人、成员结论为准、禁止代写、禁止 spawn 自己、一个会话只跑一个任务键、核对不通过不得声称已核实…）；
+5. 配套技能清单（名字 + 一行摘要 + 分层细节数量，正文按需取）。
 
-**成员定义不整团预注入**：派发谁才用 `wb_expert_read` 取谁，再放进 `spawn_teammate` 的 prompt。实测一个 6 人团注入约 6.4k 字符（≈4k token），整团预注入要 15k+。
+**成员定义不整团预注入**：实测一个 6 人团注入约 6.4k 字符（≈4k token），整团预注入要 15k+。但**也不让模型自己读原文再自己拼** —— 那样容易漏、容易截断、容易照职业名想象，结果是「看着像那个专家、其实提示词不是它」。改成由 `wb_expert_dispatch` 读原文、拼 prompt、算身份指纹、登记派发，模型只负责把返回的 `prompt` **原样**交给 `spawn_teammate`。
+
+### 任务键：一个会话只跑一件事
+
+任务键 = `order`（哪件事）× `role`（哪个角色）× `round`（第几轮），召唤时算出并落进 `summons.json`：
+
+| 情况 | 行为 |
+|---|---|
+| 同会话换 `order` 或换专家 | **拒绝**（`session-busy` / HTTP 409），必须开新会话 |
+| 同任务键再召唤一次 | 放行，算**续做**：`continuations` +1，轮次预算接着算不清零 |
+| 同 `order` 同角色但 `round`+1 | **拒绝** —— 返工逐轮换新实例，必须开新会话（上一轮的评审人不该验自己提过的修改） |
+| 升级前留下的记录（无 `taskKey`） | **不拦**，接管后补上键（否则用户升级后正在用的会话会被一次性锁死） |
+
+成员派发同样受键约束：同 `order+agent+round` 只能派一次（`duplicate-dispatch`），返工把 `round` 加 1。
+
+### 派发核对能核到什么、核不到什么
+
+`wb_expert_verify` 读宿主真实登记的子代理目录（`ctx.subagents.listChildren`），认 `wb_expert_dispatch` 发的 `wb:<指纹前12位>` 标记：
+
+- **核得到**：这个子代理确实是按那次派发起来的（认到标记 + 拿回真实 childId），同标记认到 2 个 = 同轮被 spawn 了多次，判不通过；
+- 🔴 **核不到**：宿主的 `SubagentCatalogEntry` 只有 `id / createdAt / mode / label`，**不含 prompt 原文**，所以逐字比对提示词做不到。逐字一致性靠「prompt 只能来自 `wb_expert_dispatch`」这条规程保证；
+- 宿主没提供该服务时返回 `readable:false` 且 `verified:false` —— **读不到 ≠ 通过**，文案里明写不得据此声称已核实。
+
 
 ### 为什么要有「调度映射表」
 
@@ -222,7 +246,7 @@ WorkBuddy 原文写的是它自己运行时的原语，DSH 里不是这些名字
 | `TeamCreate` | Lead 直接 `spawn_teammate` 即建团 |
 | `Agent(name, subagent_type)` | `spawn_teammate(name="<Agent ID>", prompt=…)` |
 | `SendMessage` 回传主理人 | `send_message(target="lead")` |
-| `maxTurns` | 无等价参数，用「每阶段简报进度」控制节奏 |
+| `maxTurns` | 宿主无等价参数，但插件在数：预算 `turnBudget`（默认 150）步，到 80% 在注入段末尾追加预警，超预算升级成 🛑 并要求写续做交接 |
 
 官方「禁止成员互相直连」红线原样保留（DSH 本身允许 peer 互发，所以在 prompt 里显式约束）。
 
@@ -232,12 +256,16 @@ WorkBuddy 原文写的是它自己运行时的原语，DSH 里不是这些名字
 |---|---|
 | `wb_experts_list` | 列目录（`kind` / `category` / `q` / `limit` / `refresh`） |
 | `wb_expert_read` | 取原文：不传参 = 包清单；`agent=` 成员定义；`skill=` 技能正文；`skill+ref=` 分层细节 |
-| `wb_summon` | 把某专家召唤进**当前会话**；市场专家传 `plugin` + `marketExpertId` |
-| `wb_unsummon` | 取消当前会话的召唤 |
+| `wb_summon` | 把某专家召唤进**当前会话**（`plugin`，市场专家加 `marketExpertId`，可带 `order` / `round`）；异任务键会被拒 |
+| `wb_unsummon` | 取消当前会话的召唤（连带撤销派发登记、清轮次计数） |
+| `wb_expert_dispatch` | 🔴 派发成员前**必须先调**：插件读定义原文、拼完整 prompt、算身份指纹、登记派发，返回 `{name, description, prompt, token, taskKey}` |
+| `wb_expert_verify` | 读宿主真实子代理目录认 `wb:` 标记，核对派发是否落地；宿主没提供该服务时如实报 `readable:false` |
 | `wb_market_search` | 搜在线市场（`q` / `category` / `page` / `pageSize`），返回 `marketExpertId` |
 | `wb_market_capture` | 连接市场：默认从 9222 调试端口抓 token，也可直接传 `token` |
 
 后两个受 `market.enabled` 控制（`false` 时不注册）。长文本一律分段返回（`maxReadChars` 默认 24k 字符/段，`nextFrom` + `from=` 续读）；成员 / 技能 / ref 都按需取，不整包灌。
+
+**`wb_expert_dispatch` 不截断**：成员定义超过 `maxDispatchChars`（默认 120000）时**拒绝派发**而不是截断 —— 半份人设会得到一个「看着像、其实不是」的成员，那正是这套机制要治的病。内置全域智囊团最长的一份定义是 16.7k 字符，远低于上限。
 
 ## HTTP 路由（渲染进程同源 fetch，免 token）
 
@@ -348,6 +376,8 @@ cd dsh-workbuddy-summon
 |---|---|---|
 | `maxLeadChars` | `24000` | 注入段里主理人定义正文的字符上限（超出截断 + 续读提示） |
 | `maxReadChars` | `24000` | `wb_expert_read` 单段返回上限 |
+| `maxDispatchChars` | `120000` | `wb_expert_dispatch` 的成员定义上限；**超出拒绝派发，不截断** |
+| `turnBudget` | `150` | 轮次预算（步）。到 80% 在注入段末尾追加预警，超预算升级成 🛑 并要求写续做交接 |
 | `warmCatalog` | `true` | 启动后预热目录；`false` = 首次使用时再拉 |
 | `installShims` | `true` | 启动时把 `bin/` 垫片装进 PATH |
 | `market.enabled` | `true` | 在线市场总开关；`false` = 不注册 `wb_market_*` 工具（市场 tab 没 token 时即「未连接」） |

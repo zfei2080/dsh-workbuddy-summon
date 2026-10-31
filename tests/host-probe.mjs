@@ -60,9 +60,18 @@ console.log(
 	`apply 完成：section×${calls.sections.length} tool×${calls.tools.length} route×${calls.routes.length} effect×${calls.effects}`,
 );
 if (calls.sections.length !== 1) throw new Error("systemPrompt.section 应注册 1 段");
-// 0.3.0：4 个目录/召唤工具 + 2 个在线市场工具（wb_market_* 受 cfg.market.enabled 控制）
-if (calls.tools.length !== 6) throw new Error(`应注册 6 个工具（4 目录 + 2 市场），实得 ${calls.tools.length}`);
-for (const need of ["wb_experts_list", "wb_expert_read", "wb_summon", "wb_unsummon", "wb_market_search", "wb_market_capture"]) {
+// 0.5.0：6 个目录/召唤/派发工具 + 2 个在线市场工具（wb_market_* 受 cfg.market.enabled 控制）
+if (calls.tools.length !== 8) throw new Error(`应注册 8 个工具（6 目录/派发 + 2 市场），实得 ${calls.tools.length}`);
+for (const need of [
+	"wb_experts_list",
+	"wb_expert_read",
+	"wb_summon",
+	"wb_unsummon",
+	"wb_expert_dispatch",
+	"wb_expert_verify",
+	"wb_market_search",
+	"wb_market_capture",
+]) {
 	if (!calls.tools.some((t) => t.name === need)) throw new Error(`缺少工具 ${need}`);
 }
 if (calls.routes.length !== 1) throw new Error("webServer 路由应注册 1 条");

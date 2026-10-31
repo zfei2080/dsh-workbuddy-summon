@@ -153,20 +153,27 @@ try {
 	console.log("\n① 工具注册：市场开关");
 	const namesA = A.calls.tools.map((t) => t.name);
 	const namesB = B.calls.tools.map((t) => t.name);
-	ok("市场开 → 6 个工具（4 目录/召唤 + 2 市场）", namesA.length === 6, namesA.join(", "));
+	ok("市场开 → 8 个工具（6 目录/召唤/派发 + 2 市场）", namesA.length === 8, namesA.join(", "));
 	ok(
 		"wb_market_search / wb_market_capture 已注册",
 		namesA.includes("wb_market_search") && namesA.includes("wb_market_capture"),
 		namesA.filter((n) => n.startsWith("wb_market_")).join(", "),
 	);
-	ok("市场关 → 只注册 4 个目录/召唤工具", namesB.length === 4, namesB.join(", "));
+	ok("市场关 → 只注册 6 个目录/召唤/派发工具", namesB.length === 6, namesB.join(", "));
 	ok(
 		"市场关 → 两个市场工具都不注册",
 		!namesB.includes("wb_market_search") && !namesB.includes("wb_market_capture"),
 		namesB.filter((n) => n.startsWith("wb_market_")).join(",") || "0 个",
 	);
-	const baseTools = ["wb_experts_list", "wb_expert_read", "wb_summon", "wb_unsummon"];
-	ok("4 个原有工具在两种装配下都在", baseTools.every((n) => namesA.includes(n) && namesB.includes(n)));
+	const baseTools = [
+		"wb_experts_list",
+		"wb_expert_read",
+		"wb_summon",
+		"wb_unsummon",
+		"wb_expert_dispatch",
+		"wb_expert_verify",
+	];
+	ok("6 个原有工具在两种装配下都在", baseTools.every((n) => namesA.includes(n) && namesB.includes(n)));
 	const marketTools = A.calls.tools.filter((t) => t.name.startsWith("wb_market_"));
 	const badSchema = marketTools.filter(
 		(t) =>
@@ -267,7 +274,7 @@ try {
 	const unknown = await call(handlerA, "GET", `${R}/market/nope`);
 	ok("未知 /market/ 子路径 → 404（不是 500）", unknown.status === 404, String(unknown.status));
 	assert.ok(A.calls.effects > 0 && B.calls.effects > 0);
-	ok("两次装配的 effect 数量正确（8 = 1 段 + 6 工具 + 1 路由｜市场关 6 = 1 段 + 4 工具 + 1 路由）", A.calls.effects === 8 && B.calls.effects === 6, `${A.calls.effects} / ${B.calls.effects}`);
+	ok("两次装配的 effect 数量正确（10 = 1 段 + 8 工具 + 1 路由｜市场关 8 = 1 段 + 6 工具 + 1 路由）", A.calls.effects === 10 && B.calls.effects === 8, `${A.calls.effects} / ${B.calls.effects}`);
 } catch (error) {
 	if (error?.code !== "isolate") {
 		fails += 1;

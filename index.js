@@ -1,5 +1,5 @@
 /**
- * dsh-workbuddy-summon — Host 半边（0.2.0）
+ * dsh-workbuddy-summon — Host 半边（0.5.0）
  *
  * 把 WorkBuddy 的「专家 / 专家团」做成在线目录 + 对话框召唤，目录口径与 WorkBuddy
  * 专家中心逐条一致（本机专家中心快照优先，其次 COS 在线清单，再退插件缓存 / 本机镜像；
@@ -9,8 +9,18 @@
  *     （求值器每个模型步都跑，里面绝不能有网络或磁盘扫描）；
  *   · 成员正文按需取（wb_expert_read），不整团预注入，避免一个 6 人团吃掉几万 token。
  *
+ * 0.5.0 加的三条纪律（都是宿主今天拦不住、只能靠模型自觉的地方，见 lib/dispatch.js）：
+ *   · **一个会话只跑一个任务键**（order×plugin×round）：异键拒绝，同键算续做，
+ *     轮次+1 也拒绝（返工逐轮换新实例，必须开新会话）；
+ *   · **派发不由模型拼提示词**：wb_expert_dispatch 自己读定义原文、自己拼 prompt、
+ *     算身份指纹并登记；模型只负责把返回的 prompt 原样交给 spawn_teammate；
+ *   · **派完能核对**：wb_expert_verify 读宿主真实登记的子代理目录认 wb: 标记。
+ *     核不到就如实报核不到 —— 读不到 ≠ 通过。
+ *
  * 依赖服务：systemPrompt（注入段）、tools（模型侧工具）、webServer（UI 路由）、
  * agents（拿当前发起 Agent → sessionId）。
+ * 可选服务：subagents（回读子代理目录做派发核对）—— 用 ctx.get 惰性取，
+ * 拿不到就降级成「核对不了」，不让插件因为宿主没装它而挂载失败。
  */
 import { mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -32,7 +42,23 @@ import {
 	sessionIdOf,
 	pruneSummons,
 } from "./lib/state.js";
-import { composeSummon, SECTION_NAME, SECTION_ORDER } from "./lib/inject.js";
+import { composeSummon, turnWarning, SECTION_NAME, SECTION_ORDER } from "./lib/inject.js";
+import {
+	makeTaskKey,
+	parseTaskKey,
+	fingerprint,
+	shortToken,
+	recordDispatch,
+	getDispatch,
+	listDispatches,
+	markVerified,
+	markMismatch,
+	revokeDispatches,
+	bumpTurns,
+	resetTurns,
+	pruneDispatches,
+	DEFAULT_TURN_BUDGET,
+} from "./lib/dispatch.js";
 import { getAvatar, avatarUrl, marketAvatarUrl, getAvatarBySrc, AVATAR_DEFAULT_SIZE } from "./lib/avatars.js";
 import {
 	readToken,
@@ -181,6 +207,9 @@ async function buildSection(sessionId, entry, pkg, cfg) {
 	const text = composeSummon(entry, pkg, {
 		sessionId,
 		maxLeadChars: Number.isFinite(cfg?.maxLeadChars) ? cfg.maxLeadChars : 24_000,
+		taskKey: cfg?.taskKey,
+		continuation: cfg?.continuation,
+		turnBudget: Number.isFinite(cfg?.turnBudget) ? cfg.turnBudget : DEFAULT_TURN_BUDGET,
 	});
 	if (text.length === 0) {
 		// 组装不出内容（例如包本体取不到）：删掉落盘而不是写空串，避免留 0 字节垃圾
@@ -247,6 +276,33 @@ async function summon(opts) {
 	}
 	const kind = (entry.expertType ?? "agent") === "team" ? "team" : "expert";
 	const isMarket = typeof entry.marketExpertId === "string" && entry.marketExpertId.length > 0;
+
+	// ── 一事一会话的闸 ──
+	// 任务键 = order（哪件事）× role（哪个专家）× round（第几轮）。
+	// 同键 ⇒ 续做，放行并计数；异键 ⇒ 拒绝，必须开新会话。
+	// 升级前留下的记录没有 taskKey，不拦（否则会把用户正在用的会话锁死），接管后补上键。
+	const taskKey = makeTaskKey({ order: opts.order, role: plugin, round: opts.round });
+	const existing = getSummon(sessionId);
+	let continuation = 0;
+	if (existing !== undefined && typeof existing.taskKey === "string" && existing.taskKey !== taskKey) {
+		const prev = parseTaskKey(existing.taskKey);
+		const next = parseTaskKey(taskKey);
+		const sameJobNewRound = prev !== undefined && next !== undefined
+			&& prev.order === next.order && prev.role === next.role && next.round > prev.round;
+		throw Object.assign(
+			new Error(
+				`本会话已经在跑「${existing.title ?? existing.plugin}」（任务 ${prev?.order ?? "?"} · 第 ${prev?.round ?? "?"} 轮），` +
+					`不能再换成「${entryView(entry).title}」（任务 ${next?.order ?? "?"} · 第 ${next?.round ?? "?"} 轮）。` +
+					`一个会话只跑一件事：请开一个新会话再召唤。` +
+					(sameJobNewRound
+						? `若这是同一件事的返工换轮次，也必须换新会话——逐轮换新实例，别让上一轮的评审人验自己改过的东西。`
+						: `若确实要在本会话换人，先 wb_unsummon（会丢掉当前专家身份，会话历史保留），但那样两个任务的上下文会混在一起，不推荐。`),
+			),
+			{ code: "session-busy", existing: existing.taskKey, incoming: taskKey },
+		);
+	}
+	if (existing !== undefined) continuation = (existing.continuations ?? 0) + 1;
+
 	const pkg = await packageFor(entry);
 	if (pkg === undefined || pkg.manifest === undefined) {
 		throw Object.assign(
@@ -259,7 +315,7 @@ async function summon(opts) {
 	}
 	// 先算注入段（buildSection 会把文本放进内存 sections，注入即刻生效），
 	// 再一次性写召唤状态 —— 避免出现「状态说已召唤、注入段还没就绪」的窗口。
-	const built = await buildSection(sessionId, entry, pkg, opts.config);
+	const built = await buildSection(sessionId, entry, pkg, { ...opts.config, taskKey, continuation });
 	const view = entryView(entry);
 	const avatar = isMarket
 		? marketAvatarUrl(entry.avatar)
@@ -278,7 +334,13 @@ async function summon(opts) {
 		pkgSkills: pkg.skills?.length ?? 0,
 		chars: built.chars,
 		truncated: built.truncated,
+		taskKey,
+		order: parseTaskKey(taskKey)?.order ?? "-",
+		round: parseTaskKey(taskKey)?.round ?? 1,
+		continuations: continuation,
 	});
+	// 续做时轮次预算接着算，不清零；新任务从 0 开始
+	if (continuation === 0) resetTurns(sessionId);
 	return {
 		sessionId,
 		plugin,
@@ -290,14 +352,21 @@ async function summon(opts) {
 		avatarUrl: avatar,
 		members: view.members.map((m) => m.id),
 		skills: (pkg.skills ?? []).map((s) => s.name),
+		taskKey,
+		continuation,
+		...(continuation > 0
+			? { note: `本会话第 ${continuation + 1} 次召唤同一任务键，按「续做」处理：起点＝工作区现状与前任留下的文件，**不许重做已完成的部分**，也不要另起新会话。` }
+			: {}),
 		...built,
 	};
 }
 
-/** 取消召唤（清注入 + 清状态）。 */
+/** 取消召唤（清注入 + 清状态 + 撤销派发登记）。 */
 function unsummon(sessionId) {
 	sections.delete(sessionId);
 	removeSectionFile(sessionId);
+	revokeDispatches(sessionId);
+	resetTurns(sessionId);
 	return clearSummon(sessionId);
 }
 
@@ -488,7 +557,9 @@ function toolSummon(ctx, cfg) {
 		description:
 			"把一个 WorkBuddy 专家 / 专家团召唤进**当前会话**（等价于用户在对话框点「召唤」）。" +
 			"生效后该角色的身份、工作方法、团队编制与调度规程会注入本会话的系统提示词，" +
-			"后续每一轮都保持生效，直到 wb_unsummon 或用户取消。只影响当前会话。",
+			"后续每一轮都保持生效，直到 wb_unsummon 或用户取消。只影响当前会话。" +
+			"🔴 一个会话只跑一个任务键（order×plugin×round）：本会话已在跑别的事项或别的专家时会被直接拒绝，" +
+			"这时请开新会话，不要就地接着做。同一任务键再召唤一次＝续做，会接着上次的轮次预算。",
 		parameters: {
 			type: "object",
 			properties: {
@@ -497,6 +568,8 @@ function toolSummon(ctx, cfg) {
 					type: "string",
 					description: "在线市场专家 ID（wb_market_search 返回的 marketExpertId）；提供时会下载并解包该专家的包体",
 				},
+				order: { type: "string", description: "事项标识（工单号 / 任务名），用于一事一会话的判定。缺省为未指定" },
+				round: { type: "number", description: "轮次，默认 1。同一事项返工换新实例时加 1" },
 			},
 			required: ["plugin"],
 			additionalProperties: false,
@@ -511,9 +584,14 @@ function toolSummon(ctx, cfg) {
 				sessionId,
 				key: String(args?.plugin ?? "").trim(),
 				marketExpertId: typeof args?.marketExpertId === "string" ? args.marketExpertId : undefined,
+				order: typeof args?.order === "string" ? args.order : undefined,
+				round: Number.isFinite(args?.round) ? args.round : undefined,
 				config: cfg,
 			});
-			return { ...result, note: "注入已生效，从下一轮请求开始按该专家身份工作。" };
+			return {
+				...result,
+				note: result.note ?? "注入已生效，从下一轮请求开始按该专家身份工作。",
+			};
 		},
 	};
 }
@@ -530,6 +608,294 @@ function toolUnsummon(ctx) {
 			const sessionId = currentSessionId(ctx);
 			const before = getSummon(sessionId);
 			return { sessionId: sessionId ?? null, summoned: before !== undefined, cleared: unsummon(sessionId) };
+		},
+	};
+}
+
+/* ─────────────────────────── 成员派发与核对 ─────────────────────────── */
+
+/**
+ * 成员定义原文的派发上限。超过就**拒绝**，不静默截断 ——
+ * 静默截断一份人设，正是「看着像那个专家、其实提示词不是它」的来源。
+ */
+const MAX_DISPATCH_CHARS = 120_000;
+
+/** 从包清单里取成员的职业名（做 spawn 的 description 用）。 */
+function memberProfession(pkg, agentId) {
+	const m = (pkg?.manifest?.members ?? []).find((x) => x?.id === agentId);
+	return zh(m?.profession) || zh(m?.name) || zh(m?.displayName) || "";
+}
+
+/**
+ * 读宿主真实登记的子代理目录。
+ * 用 ctx.get 而不是写进 inject —— 拿不到就降级，不能让插件因为宿主没装
+ * sessionQuery 而挂载失败。返回 undefined 表示「读不到」，与「读到但为空」区分开。
+ */
+async function readChildren(ctx, sessionId) {
+	try {
+		const subagents = ctx.get?.("subagents");
+		if (typeof subagents?.listChildren !== "function") return undefined;
+		const rows = await subagents.listChildren(sessionId);
+		return Array.isArray(rows) ? rows : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function toolDispatch(ctx, cfg) {
+	const cap = Number.isFinite(cfg?.maxDispatchChars) ? cfg.maxDispatchChars : MAX_DISPATCH_CHARS;
+	return {
+		name: "wb_expert_dispatch",
+		description:
+			"派发一个团队成员前**必须先调它**：插件自己读成员定义原文、自己拼好完整 prompt、" +
+			"算出身份指纹并登记这次派发，返回 { name, description, prompt, token, taskKey }。" +
+			"拿到后原样调 spawn_teammate(name, description, prompt)——prompt 不得增删一字，" +
+			"description 里的 wb: 标记不得删（wb_expert_verify 靠它回读核对）。" +
+			"同一个 order+agent+round 只能派一次；返工换新实例就把 round 加 1。" +
+			"不要自己拿 wb_expert_read 的结果拼 prompt。",
+		parameters: {
+			type: "object",
+			properties: {
+				agent: { type: "string", description: "成员 Agent ID（注入段编制表里的那个 id，不是中文名）" },
+				task: {
+					type: "string",
+					description: "本次任务说明 + 上一阶段产出**原文**。成员看不到本会话上下文，缺什么它就没有什么",
+				},
+				order: { type: "string", description: "事项标识（工单号 / 任务名）。缺省用本会话任务键的事项段" },
+				round: { type: "number", description: "轮次，首轮 1；返工换新实例时加 1" },
+			},
+			required: ["agent", "task"],
+			additionalProperties: false,
+		},
+		output: { schema: { type: "object", additionalProperties: true }, render: jsonRender },
+		async execute(args) {
+			const sessionId = currentSessionId(ctx);
+			if (sessionId === undefined) throw new Error("wb_expert_dispatch: 取不到当前会话 id");
+			const agentId = String(args?.agent ?? "").trim();
+			if (agentId.length === 0) throw new Error("wb_expert_dispatch: 需要 agent");
+			const task = String(args?.task ?? "");
+			if (task.trim().length === 0) throw new Error("wb_expert_dispatch: 需要 task（成员看不到本会话上下文）");
+
+			const summon = getSummon(sessionId);
+			if (summon === undefined) {
+				throw new Error("wb_expert_dispatch: 本会话没有召唤记录，先 wb_summon");
+			}
+			const pkg = await loadPackage(summon.plugin, {});
+			if (pkg?.manifest === undefined) {
+				throw new Error(`wb_expert_dispatch: 取不到包 "${summon.plugin}" 的定义`);
+			}
+			const md = pkg.agents?.[agentId];
+			if (md === undefined) {
+				throw Object.assign(
+					new Error(`wb_expert_dispatch: 包 "${summon.plugin}" 里没有成员 "${agentId}"。可用：${(pkg.agentNames ?? []).join(", ")}`),
+					{ code: "not-found" },
+				);
+			}
+			if (md.length > cap) {
+				throw Object.assign(
+					new Error(
+						`wb_expert_dispatch: 成员 "${agentId}" 的定义有 ${md.length} 字符，超过派发上限 ${cap}。` +
+							`拒绝截断派发——半份人设会得到一个「看着像、其实不是」的成员。` +
+							`请把配置项 maxDispatchChars 调大后重试。`,
+					),
+					{ code: "too-large" },
+				);
+			}
+
+			// order 缺省继承本会话任务键的事项段，别让它凭空编一个
+			const sessionOrder = parseTaskKey(summon.taskKey ?? "")?.order;
+			const order = String(args?.order ?? "").trim() || (sessionOrder !== undefined && sessionOrder !== "-" ? sessionOrder : "");
+			const round = Number.isFinite(args?.round) ? Math.max(1, Math.floor(args.round)) : 1;
+			const taskKey = makeTaskKey({ order, role: agentId, round });
+
+			const fp = fingerprint({ agent: agentId, md, taskKey });
+			const token = shortToken(fp);
+			const booked = recordDispatch({
+				sessionId,
+				taskKey,
+				agent: agentId,
+				fingerprint: fp,
+				promptChars: md.length + task.length,
+				label: token,
+				order,
+				round,
+			});
+			if (!booked.ok) {
+				const prev = parseTaskKey(booked.record.taskKey ?? taskKey);
+				throw Object.assign(
+					new Error(
+						`wb_expert_dispatch: 「${order || "-"} · ${agentId} · 第 ${prev?.round ?? round} 轮」已经派发过了` +
+							`（${booked.record.at}，状态 ${booked.record.status}）。一事一专家一轮次只能派一次。` +
+							(booked.record.status === "verified"
+								? `要它接着做就用 send_message 给那个已在跑的子代理，不要重开一个。`
+								: `这是返工要换新实例的话，把 round 传 ${round + 1}。`),
+					),
+					{ code: "duplicate-dispatch", record: booked.record },
+				);
+			}
+
+			const profession = memberProfession(pkg, agentId);
+			const description = `${profession.length > 0 ? `${profession} · ` : ""}${agentId} [${token}]`;
+			const prompt = `${md}\n\n---\n\n# 本次任务（由主理人下发）\n\n${task}\n`;
+			return {
+				dispatchId: taskKey,
+				taskKey,
+				name: agentId,
+				description,
+				prompt,
+				token,
+				fingerprint: fp,
+				definitionChars: md.length,
+				promptChars: prompt.length,
+				round,
+				order: order || "-",
+				next: `原样调 spawn_teammate(name="${agentId}", description=<上面的 description>, prompt=<上面的 prompt 整段>)，` +
+					`然后调 wb_expert_verify(agent="${agentId}", round=${round}) 核对。`,
+			};
+		},
+	};
+}
+
+function toolVerify(ctx, cfg) {
+	return {
+		name: "wb_expert_verify",
+		description:
+			"核对成员是不是真的按规程派发出去了：读宿主登记的子代理目录，认 wb_expert_dispatch 发的 wb: 标记。" +
+			"认得到 = 这次派发落地了；认不到 = 没按规程走（没 spawn、或 prompt/description 被改过、或自己拼的）。" +
+			"宿主没提供子代理目录读取时会如实返回 readable:false，那只代表核对不了，不代表派发成功——不得据此声称已核实。",
+		parameters: {
+			type: "object",
+			properties: {
+				agent: { type: "string", description: "成员 Agent ID；省略则核对本会话全部未核实的派发" },
+				round: { type: "number", description: "轮次，默认 1" },
+				order: { type: "string", description: "事项标识，缺省用本会话任务键的事项段" },
+			},
+			additionalProperties: false,
+		},
+		output: { schema: { type: "object", additionalProperties: true }, render: jsonRender },
+		async execute(args) {
+			const sessionId = currentSessionId(ctx);
+			if (sessionId === undefined) throw new Error("wb_expert_verify: 取不到当前会话 id");
+			const summon = getSummon(sessionId);
+			const sessionOrder = parseTaskKey(summon?.taskKey ?? "")?.order;
+			const order = String(args?.order ?? "").trim()
+				|| (sessionOrder !== undefined && sessionOrder !== "-" ? sessionOrder : "");
+			const round = Number.isFinite(args?.round) ? Math.max(1, Math.floor(args.round)) : 1;
+			const agentId = typeof args?.agent === "string" && args.agent.trim().length > 0 ? args.agent.trim() : undefined;
+
+			// 指定了 agent 就精确核对那一条 (order, agent, round)；没指定才核对本会话全部待核对的。
+			// 🔴 round 必须真参与定位 —— 收了参数却不用来过滤，会把别的轮次一起算进来，
+			// 结果是「明明这一轮派对了，却因为另一轮没派而判不通过」。
+			let targets;
+			if (agentId === undefined) {
+				targets = listDispatches(sessionId).filter((d) => d.status === "dispatched" || d.status === "mismatch");
+				if (targets.length === 0) {
+					return {
+						sessionId,
+						readable: true,
+						verified: false,
+						checked: 0,
+						reason: "本会话没有待核对的派发。先走 wb_expert_dispatch，不要自己拼 prompt 直接 spawn。",
+					};
+				}
+			} else {
+				const key = makeTaskKey({ order, role: agentId, round });
+				const hit = getDispatch(sessionId, key);
+				if (hit === undefined) {
+					const any = listDispatches(sessionId).filter((d) => d.agent === agentId);
+					return {
+						sessionId,
+						agent: agentId,
+						taskKey: key,
+						verified: false,
+						readable: false,
+						reason: any.length === 0
+							? `没有「${agentId}」的派发登记——先调 wb_expert_dispatch，不要自己拼 prompt 直接 spawn。`
+							: `没有「${key}」这一条派发登记。该成员已登记的轮次：${any.map((d) => `r${d.round}(${d.status})`).join(", ")}。`,
+					};
+				}
+				if (hit.status === "verified") {
+					return {
+						sessionId,
+						readable: true,
+						verified: true,
+						checked: 1,
+						passed: 1,
+						results: [{
+							taskKey: hit.taskKey,
+							agent: hit.agent,
+							verified: true,
+							childId: hit.childId,
+							note: `此前已核对通过（${hit.verifiedAt}），直接复用结论。`,
+						}],
+					};
+				}
+				if (hit.status === "revoked") {
+					return {
+						sessionId,
+						verified: false,
+						readable: false,
+						reason: `「${key}」的派发登记已随取消召唤撤销，无法核对。要重新派发请重走 wb_expert_dispatch。`,
+					};
+				}
+				targets = [hit];
+			}
+
+			const children = await readChildren(ctx, sessionId);
+			if (children === undefined) {
+				// 读不到 ≠ 没发生。如实报「核对不了」，别把它算成通过。
+				return {
+					sessionId,
+					verified: false,
+					readable: false,
+					pending: targets.map((d) => ({ taskKey: d.taskKey, agent: d.agent, token: d.token, at: d.at })),
+					reason:
+						"宿主未提供子代理目录读取（ctx.subagents.listChildren 不可用），无法回读核对。" +
+						"派发意图已登记，但**实际起来的子代理未经核实**——不得据此声称已按规程派发。",
+				};
+			}
+
+			// label 是唯一能回读到的身份线索（catalog 行只有 id/createdAt/mode/label，不含 prompt）
+			const labels = children.map((c) => String(c?.label ?? ""));
+			const results = [];
+			for (const d of targets) {
+				const hits = children.filter((c, i) => labels[i].includes(d.token));
+				if (hits.length === 1) {
+					markVerified(sessionId, d.taskKey, String(hits[0].id ?? ""));
+					results.push({ taskKey: d.taskKey, agent: d.agent, verified: true, childId: String(hits[0].id ?? "") });
+				} else if (hits.length > 1) {
+					markMismatch(sessionId, d.taskKey, `同一个标记 ${d.token} 认到 ${hits.length} 个子代理`);
+					results.push({
+						taskKey: d.taskKey,
+						agent: d.agent,
+						verified: false,
+						reason: `同一个派发标记认到 ${hits.length} 个子代理——同一轮次被 spawn 了多次。逐轮只能有一个实例。`,
+					});
+				} else {
+					markMismatch(sessionId, d.taskKey, "宿主目录里认不到该标记");
+					results.push({
+						taskKey: d.taskKey,
+						agent: d.agent,
+						verified: false,
+						reason:
+							`宿主登记的 ${children.length} 个子代理里认不到标记 ${d.token}。` +
+							`可能是没真的 spawn、description 里的标记被删了、或 prompt 是自己拼的。重走 wb_expert_dispatch。`,
+					});
+				}
+			}
+			const passed = results.filter((r) => r.verified).length;
+			return {
+				sessionId,
+				readable: true,
+				verified: passed === results.length && results.length > 0,
+				childrenSeen: children.length,
+				checked: results.length,
+				passed,
+				results,
+				limit:
+					"回读只认到「子代理确实按这次派发起来了」（catalog 行只含 id/createdAt/mode/label）。" +
+					"宿主不暴露子代理的 prompt 原文，所以**逐字比对提示词做不到**；逐字一致性由「prompt 只能来自 wb_expert_dispatch」这条规程保证。",
+			};
 		},
 	};
 }
@@ -935,6 +1301,8 @@ function makeHandler(ctx, cfg) {
 					sessionId,
 					key: String(body.plugin ?? "").trim(),
 					marketExpertId: typeof body.marketExpertId === "string" ? body.marketExpertId : undefined,
+					order: typeof body.order === "string" ? body.order : undefined,
+					round: Number.isFinite(body.round) ? body.round : undefined,
 					fresh: body.refresh === true,
 					config: cfg,
 				});
@@ -948,14 +1316,19 @@ function makeHandler(ctx, cfg) {
 			const http =
 				code === "not-found" || code === "package-unavailable"
 					? 404
-					: code === "bad-entry"
+					: code === "bad-entry" || code === "too-large"
 						? 400
-						: needsMarketAuth
-							? 401
-							: 500;
+						: code === "session-busy" || code === "duplicate-dispatch"
+							? 409
+							: needsMarketAuth
+								? 401
+								: 500;
 			reply(res, http, {
 				ok: false,
 				error: String(error?.message ?? error),
+				...(code === "session-busy"
+					? { existingTaskKey: error.existing, incomingTaskKey: error.incoming, hint: "一个会话只跑一件事：请开新会话，或先取消当前召唤。" }
+					: {}),
 				...(needsMarketAuth ? { hint: MARKET_HINT } : {}),
 			});
 		}
@@ -981,7 +1354,10 @@ export async function apply(ctx, config) {
 	// 状态文件封顶：丢掉最老的会话，避免无限增长。
 	const all = Object.entries(listSummons()).sort((a, b) => String(a[1].at).localeCompare(String(b[1].at)));
 	if (all.length > MAX_SUMMON_SESSIONS) {
-		pruneSummons(new Set(all.slice(all.length - MAX_SUMMON_SESSIONS).map(([id]) => id)));
+		const keep = new Set(all.slice(all.length - MAX_SUMMON_SESSIONS).map(([id]) => id));
+		pruneSummons(keep);
+		// 派发登记与轮次跟着同一批会话一起回收，别留孤儿
+		pruneDispatches(keep);
 	}
 	// 段落盘回收：0 字节历史遗留 + 上面封顶后新产生的孤儿（必须在 prune 之后跑）
 	const swept = sweepSectionFiles();
@@ -1011,6 +1387,7 @@ export async function apply(ctx, config) {
 	}
 
 	// ── 注入段：未召唤 → 空串（零残留）──
+	// 求值器每个模型步都跑，这里搭车数轮次：只做内存累加，落盘按批（见 lib/dispatch.js）。
 	ctx.effect(
 		() =>
 			ctx.systemPrompt.section({
@@ -1020,7 +1397,10 @@ export async function apply(ctx, config) {
 					const sessionId = sessionIdOf(context);
 					if (sessionId === undefined) return "";
 					const hit = sections.get(sessionId);
-					if (hit !== undefined) return hit.text;
+					if (hit !== undefined) {
+						const t = bumpTurns(sessionId, cfg.turnBudget ?? DEFAULT_TURN_BUDGET);
+						return t.warn ? `${hit.text}${turnWarning(t.steps, t.budget)}` : hit.text;
+					}
 					const record = getSummon(sessionId);
 					if (record === undefined) return "";
 					// 有召唤记录但段没就绪（重启补算中）：本轮先不注入，后台补算。
@@ -1032,7 +1412,14 @@ export async function apply(ctx, config) {
 	);
 
 	// ── 模型侧工具 ──
-	const builtTools = [toolList(ctx, cfg), toolRead(ctx, cfg), toolSummon(ctx, cfg), toolUnsummon(ctx)];
+	const builtTools = [
+		toolList(ctx, cfg),
+		toolRead(ctx, cfg),
+		toolSummon(ctx, cfg),
+		toolUnsummon(ctx),
+		toolDispatch(ctx, cfg),
+		toolVerify(ctx, cfg),
+	];
 	if (cfg.market?.enabled !== false) {
 		builtTools.push(toolMarketSearch(ctx, cfg), toolMarketCapture(ctx, cfg));
 	}

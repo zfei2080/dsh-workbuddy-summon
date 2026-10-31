@@ -1,9 +1,9 @@
 {
   "name": "dsh-workbuddy-summon",
   "icon": "./assets/icon.svg",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
-  "description": "把 WorkBuddy 的专家团 / 专家做成可在 DSH 里召唤的目录：内置「全域智囊团」固化包（16 个 agent / 15 个技能，离线、换机即用），叠加官方专家中心 448 条与登录态在线市场（28k+）；未召唤零注入。0.2.0 起已移除连接器功能。",
+  "description": "把 WorkBuddy 的专家团 / 专家做成可在 DSH 里召唤的目录：内置「全域智囊团」固化包（16 个 agent / 15 个技能，离线、换机即用），叠加官方专家中心 448 条与登录态在线市场（28k+）；未召唤零注入。0.5.0 起加任务键纪律：一个会话只跑一件事、成员派发由插件拼装并可回读核对、轮次有预算。0.2.0 起已移除连接器功能。",
   "license": "MIT",
   "repository": {
     "type": "git",
